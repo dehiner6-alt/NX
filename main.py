@@ -204,8 +204,7 @@ class LanguageRoleView(discord.ui.View):
 
         await interaction.user.add_roles(role_en)
         await interaction.response.send_message("✅ You have selected **English** language.", ephemeral=True)
-
-# --- BOT PRINCIPAL ---
+        # --- BOT PRINCIPAL ---
 class NexusBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
@@ -454,4 +453,119 @@ async def backup_load(interaction: discord.Interaction, archivo: discord.Attachm
             for ch_data in cat_data.get("channels", []):
                 if ch_data["type"] == "text":
                     if not discord.utils.get(category.text_channels, name=ch_data["name"]):
-                       
+                        await guild.create_text_channel(name=ch_data["name"], category=category, topic=ch_data.get("topic"))
+                elif ch_data["type"] == "voice":
+                    if not discord.utils.get(category.voice_channels, name=ch_data["name"]):
+                        await guild.create_voice_channel(name=ch_data["name"], category=category)
+
+        await interaction.followup.send("✅ Estructura del backup restaurada/cargada con éxito.", ephemeral=True)
+        await send_log(guild, "📥 Backup Cargado", f"👤 **Administrador:** {interaction.user.mention}\nSe aplicó el archivo `{archivo.filename}`.", color=discord.Color.blue())
+
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error al procesar el archivo de backup: `{e}`", ephemeral=True)
+
+# --- COMANDOS DASHBOARD / MODERACIÓN ---
+@bot.tree.command(name="setup-onboarding", description="Despliega el panel para seleccionar idioma en un canal.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_onboarding(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🌐 Selecciona tu Idioma / Select Your Language",
+        description="🇪🇸 Haz clic en tu idioma para personalizar los canales y el sistema de tickets.\n\n🇺🇸 Click on your language button below to customize channels and ticket support.",
+        color=discord.Color.blue()
+    )
+    await interaction.channel.send(embed=embed, view=LanguageRoleView())
+    await interaction.response.send_message("✅ **[OK]** Panel de selección de idioma desplegado.", ephemeral=True)
+
+@bot.tree.command(name="setup-panel-tickets", description="Despliega el panel de soporte.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_panel_tickets(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🎟️ Panel de Soporte y Apelaciones / Support Panel",
+        description="👇 Presiona el botón de abajo para abrir un ticket de soporte privado.\n\nPress the button below to open a private support ticket.",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="Nexus Protect • Support Engine")
+    await interaction.channel.send(embed=embed, view=TicketView())
+    await interaction.response.send_message("✅ **[OK]** Panel de tickets desplegado.", ephemeral=True)
+
+@bot.tree.command(name="setup-antiraid", description="Crea o configura el canal de logs de AntiRaid y auditoría.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_antiraid(interaction: discord.Interaction):
+    await send_log(interaction.guild, "🛡️ Sistema de Auditoría & AntiRaid Activado", "✅ El canal de registros e historial de seguridad está 100% operativo.", color=discord.Color.green())
+    await interaction.response.send_message("✅ **[OK]** Canal `#nexus-logs` configurado.", ephemeral=True)
+
+@bot.tree.command(name="purge", description="Elimina una cantidad de mensajes en el canal actual.")
+@app_commands.describe(cantidad="Número de mensajes a eliminar (1-100)")
+@app_commands.checks.has_permissions(manage_messages=True)
+async def purge(interaction: discord.Interaction, cantidad: int):
+    if cantidad < 1 or cantidad > 100:
+        await interaction.response.send_message("❌ **[ERROR]** Solo puedes borrar entre 1 y 100 mensajes a la vez.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=cantidad)
+
+    await interaction.followup.send(f"🧹 Se han eliminado **{len(deleted)}** mensajes correctamente.", ephemeral=True)
+
+    await send_log(
+        interaction.guild,
+        "🧹 Purge de Mensajes",
+        f"🛡️ **Moderador:** {interaction.user.mention}\n💬 **Canal:** {interaction.channel.mention}\n🔢 **Cantidad:** `{len(deleted)}` mensajes.",
+        color=discord.Color.purple()
+    )
+
+@bot.tree.command(name="kick", description="Expulsa a un usuario del servidor.")
+@app_commands.describe(usuario="Usuario a expulsar", razon="Razón de la expulsión")
+@app_commands.checks.has_permissions(kick_members=True)
+async def kick(interaction: discord.Interaction, usuario: discord.Member, razon: str = "No especificada"):
+    await usuario.kick(reason=razon)
+    await interaction.response.send_message(f"👢 Usuario {usuario.mention} expulsado. Razón: {razon}", ephemeral=True)
+    await send_log(interaction.guild, "👢 Kick de Usuario", f"👤 **Usuario:** {usuario.mention}\n🛡️ **Moderador:** {interaction.user.mention}\n📝 **Razón:** {razon}", color=discord.Color.orange())
+
+@bot.tree.command(name="ban", description="Banea a un usuario del servidor.")
+@app_commands.describe(usuario="Usuario a banear", razon="Razón del baneo")
+@app_commands.checks.has_permissions(ban_members=True)
+async def ban(interaction: discord.Interaction, usuario: discord.Member, razon: str = "No especificada"):
+    await usuario.ban(reason=razon)
+    await interaction.response.send_message(f"⛔ Usuario {usuario.mention} baneado. Razón: {razon}", ephemeral=True)
+    await send_log(interaction.guild, "⛔ Ban de Usuario", f"👤 **Usuario:** {usuario.mention}\n🛡️ **Moderador:** {interaction.user.mention}\n📝 **Razón:** {razon}", color=discord.Color.red())
+
+@bot.tree.command(name="nexus-status", description="Muestra el estado de Nexus Protect.")
+async def nexus_status(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🛡️ Nexus Protect • Estado del Sistema",
+        description="🟢 **Estado:** En línea y operativo 24/7\n"
+                    "📜 **Transcripciones:** Activas (Envío por MD al dueño)\n"
+                    "📦 **Backup System:** Activo (`/backup-create`, `/backup-load`)\n"
+                    "🕵️ **Auditoría:** Logs en tiempo real activos\n"
+                    "⚔️ **AntiRaid:** Protección activa",
+        color=discord.Color.green()
+    )
+    await interaction.response.send_message(embed=embed)
+
+# --- SERVIDOR WEB INTERNO PARA RENDER ---
+async def handle_ping(request):
+    return web.Response(text="Nexus Protect is Online 24/7!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Servidor Web activo en el puerto {port}")
+
+# --- INICIALIZACIÓN ---
+async def main():
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        raise ValueError("Error: No se encontró 'DISCORD_TOKEN' en las Variables de Entorno de Render.")
+    
+    await start_web_server()
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+    
