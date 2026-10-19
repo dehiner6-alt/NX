@@ -5,6 +5,7 @@ import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
+from aiohttp import web
 
 try:
     from dotenv import load_dotenv
@@ -101,7 +102,6 @@ class TicketView(discord.ui.View):
         guild = interaction.guild
         user = interaction.user
 
-        # Detectar el idioma por el rol asignado en el onboarding
         user_lang = "en" if any(r.name == "English" for r in user.roles) else "es"
         txt = TICKET_TEXTS[user_lang]
 
@@ -159,7 +159,6 @@ async def on_ready():
     print(f"🛡️ Nexus Protect activo como: {bot.user.name}")
     await bot.change_presence(activity=discord.Game(name="/nexus-status | 24/7 Protected"))
 
-# Mensaje de bienvenida privado al entrar un nuevo usuario
 @bot.event
 async def on_member_join(member):
     try:
@@ -171,7 +170,7 @@ async def on_member_join(member):
         )
         await member.send(embed=embed, view=LanguageRoleView())
     except Exception:
-        pass  # Si el usuario tiene los DMs cerrados
+        pass
 
 # --- COMANDOS SLASH ---
 
@@ -205,7 +204,33 @@ async def nexus_status(interaction: discord.Interaction):
     embed = discord.Embed(title="Nexus Protect • Estado", description="Sistema activo 24/7.", color=discord.Color.green())
     await interaction.response.send_message(embed=embed)
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-if not TOKEN: raise ValueError("Error: No se encontró 'DISCORD_TOKEN'.")
+# --- SERVIDOR WEB INTERNO PARA RENDER (PORT BINDING) ---
 
-bot.run(TOKEN)
+async def handle_ping(request):
+    return web.Response(text="Nexus Protect is Online 24/7!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Servidor Web de puerto activo en el puerto {port}")
+
+# --- INICIALIZACIÓN Y ARRANQUE EN PARALELO ---
+
+async def main():
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        raise ValueError("Error: No se encontró 'DISCORD_TOKEN' en las Variables de Entorno de Render.")
+    
+    # Inicia el servidor web para satisfacer a Render y mantener el puerto abierto
+    await start_web_server()
+    
+    # Inicia el bot de Discord
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
