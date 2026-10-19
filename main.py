@@ -39,8 +39,25 @@ TICKET_TEXTS = {
     }
 }
 
-# --- SELECCIÓN DE IDIOMA AL ENTRAR (ONBOARDING) ---
+# --- FUNCIÓN DE LOGS / ANTIRAID ---
+async def send_log(guild, title, description, color=discord.Color.red()):
+    log_channel = discord.utils.get(guild.text_channels, name="nexus-logs")
+    if not log_channel:
+        # Crea el canal de seguridad si no existe
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        for role in guild.roles:
+            if role.permissions.administrator:
+                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        log_channel = await guild.create_text_channel(name="nexus-logs", overwrites=overwrites)
 
+    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.datetime.utcnow())
+    embed.set_footer(text="Nexus Protect • Security Engine")
+    await log_channel.send(embed=embed)
+
+# --- SELECCIÓN DE IDIOMA AL ENTRAR (ONBOARDING) ---
 class LanguageRoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -76,7 +93,6 @@ class LanguageRoleView(discord.ui.View):
         await interaction.response.send_message("✅ You have selected **English** language.", ephemeral=True)
 
 # --- VISTAS DE TICKETS PRIVADOS ---
-
 class CloseTicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -139,8 +155,7 @@ class TicketView(discord.ui.View):
         await ticket_channel.send(embed=embed, view=CloseTicketView())
         await interaction.response.send_message(txt["created"].format(channel=ticket_channel.mention), ephemeral=True)
 
-# --- BOT PRINCIPAL ---
-
+# --- BOT PRINCIPAL CON SISTEMA ANTIRAID Y SEGURIDAD ---
 class NexusBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
@@ -150,17 +165,25 @@ class NexusBot(commands.Bot):
         self.add_view(CloseTicketView())
         self.add_view(LanguageRoleView())
         await self.tree.sync()
-        print("Nexus Protect: Slash Commands, Onboarding y Tickets listos.")
+        print("Nexus Protect: Slash Commands, Onboarding y AntiRaid listos.")
 
 bot = NexusBot()
 
 @bot.event
 async def on_ready():
     print(f"🛡️ Nexus Protect activo como: {bot.user.name}")
-    await bot.change_presence(activity=discord.Game(name="/nexus-status | 24/7 Protected"))
+    await bot.change_presence(activity=discord.Game(name="/nexus-status | 24/7 AntiRaid"))
 
 @bot.event
 async def on_member_join(member):
+    # Log AntiRaid: Detección de entrada de usuarios
+    await send_log(
+        member.guild,
+        "🚨 AntiRaid • Nuevo Usuario",
+        f"El usuario {member.mention} (`{member.id}`) ha ingresado al servidor.",
+        color=discord.Color.blue()
+    )
+    
     try:
         embed = discord.Embed(
             title="👋 ¡Bienvenido a Nexus Support / Welcome to Nexus Support!",
@@ -172,8 +195,39 @@ async def on_member_join(member):
     except Exception:
         pass
 
-# --- COMANDOS SLASH ---
+# AntiSpam / AntiRaid: Detección de Menciones Masivas y Enlaces Sospechosos
+@bot.event
+async def on_message(message):
+    if message.author.bot or not message.guild:
+        return
 
+    # 1. Bloqueo de Menciones Masivas (@everyone / @here excesivo)
+    if len(message.mentions) > 5 or "@everyone" in message.content or "@here" in message.content:
+        if not message.author.guild_permissions.administrator:
+            await message.delete()
+            await send_log(
+                message.guild,
+                "⚠️ AntiRaid • Spam de Menciones Detectado",
+                f"Mensaje eliminado de {message.author.mention} en {message.channel.mention} por abuso de menciones.",
+                color=discord.Color.orange()
+            )
+            return
+
+    # 2. Bloqueo de Enlaces de Discord Spam / Phishing
+    if "discord.gg/" in message.content.lower() or "discord.com/invite/" in message.content.lower():
+        if not message.author.guild_permissions.administrator:
+            await message.delete()
+            await send_log(
+                message.guild,
+                "🛡️ AntiRaid • Invite Eliminada",
+                f"Se eliminó un enlace de invitación enviado por {message.author.mention} en {message.channel.mention}.",
+                color=discord.Color.red()
+            )
+            return
+
+    await bot.process_commands(message)
+
+# --- COMANDOS SLASH ---
 @bot.tree.command(name="setup-onboarding", description="Despliega el panel para seleccionar idioma en un canal.")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_onboarding(interaction: discord.Interaction):
@@ -197,40 +251,4 @@ async def setup_panel_tickets(interaction: discord.Interaction):
     )
     embed.set_footer(text="Nexus Protect • Support")
     await interaction.channel.send(embed=embed, view=TicketView())
-    await interaction.response.send_message("[OK] Panel de tickets desplegado.", ephemeral=True)
-
-@bot.tree.command(name="nexus-status", description="Muestra el estado de Nexus Protect.")
-async def nexus_status(interaction: discord.Interaction):
-    embed = discord.Embed(title="Nexus Protect • Estado", description="Sistema activo 24/7.", color=discord.Color.green())
-    await interaction.response.send_message(embed=embed)
-
-# --- SERVIDOR WEB INTERNO PARA RENDER (PORT BINDING) ---
-
-async def handle_ping(request):
-    return web.Response(text="Nexus Protect is Online 24/7!")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"🌐 Servidor Web de puerto activo en el puerto {port}")
-
-# --- INICIALIZACIÓN Y ARRANQUE EN PARALELO ---
-
-async def main():
-    TOKEN = os.getenv("DISCORD_TOKEN")
-    if not TOKEN:
-        raise ValueError("Error: No se encontró 'DISCORD_TOKEN' en las Variables de Entorno de Render.")
-    
-    # Inicia el servidor web para satisfacer a Render y mantener el puerto abierto
-    await start_web_server()
-    
-    # Inicia el bot de Discord
-    await bot.start(TOKEN)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    await interaction.response.send_message("[OK] Panel
