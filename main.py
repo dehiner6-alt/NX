@@ -43,7 +43,6 @@ TICKET_TEXTS = {
 async def send_log(guild, title, description, color=discord.Color.red()):
     log_channel = discord.utils.get(guild.text_channels, name="nexus-logs")
     if not log_channel:
-        # Crea el canal de seguridad si no existe
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
@@ -155,7 +154,7 @@ class TicketView(discord.ui.View):
         await ticket_channel.send(embed=embed, view=CloseTicketView())
         await interaction.response.send_message(txt["created"].format(channel=ticket_channel.mention), ephemeral=True)
 
-# --- BOT PRINCIPAL CON SISTEMA ANTIRAID Y SEGURIDAD ---
+# --- BOT PRINCIPAL ---
 class NexusBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
@@ -176,7 +175,6 @@ async def on_ready():
 
 @bot.event
 async def on_member_join(member):
-    # Log AntiRaid: Detección de entrada de usuarios
     await send_log(
         member.guild,
         "🚨 AntiRaid • Nuevo Usuario",
@@ -195,25 +193,22 @@ async def on_member_join(member):
     except Exception:
         pass
 
-# AntiSpam / AntiRaid: Detección de Menciones Masivas y Enlaces Sospechosos
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
         return
 
-    # 1. Bloqueo de Menciones Masivas (@everyone / @here excesivo)
     if len(message.mentions) > 5 or "@everyone" in message.content or "@here" in message.content:
         if not message.author.guild_permissions.administrator:
             await message.delete()
             await send_log(
                 message.guild,
-                "⚠️ AntiRaid • Spam de Menciones Detectado",
+                "⚠️ AntiRaid • Spam de Menciones",
                 f"Mensaje eliminado de {message.author.mention} en {message.channel.mention} por abuso de menciones.",
                 color=discord.Color.orange()
             )
             return
 
-    # 2. Bloqueo de Enlaces de Discord Spam / Phishing
     if "discord.gg/" in message.content.lower() or "discord.com/invite/" in message.content.lower():
         if not message.author.guild_permissions.administrator:
             await message.delete()
@@ -251,4 +246,41 @@ async def setup_panel_tickets(interaction: discord.Interaction):
     )
     embed.set_footer(text="Nexus Protect • Support")
     await interaction.channel.send(embed=embed, view=TicketView())
-    await interaction.response.send_message("[OK] Panel
+    await interaction.response.send_message("[OK] Panel de tickets desplegado.", ephemeral=True)
+
+@bot.tree.command(name="setup-antiraid", description="Crea o configura el canal de logs de AntiRaid.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_antiraid(interaction: discord.Interaction):
+    await send_log(interaction.guild, "🛡️ AntiRaid Activado", "El canal de registros e historial de seguridad está operativo.", color=discord.Color.green())
+    await interaction.response.send_message("[OK] Canal nexus-logs configurado para alertas AntiRaid.", ephemeral=True)
+
+@bot.tree.command(name="nexus-status", description="Muestra el estado de Nexus Protect.")
+async def nexus_status(interaction: discord.Interaction):
+    embed = discord.Embed(title="Nexus Protect • Estado", description="Sistema activo 24/7 y módulo AntiRaid monitoreando.", color=discord.Color.green())
+    await interaction.response.send_message(embed=embed)
+
+# --- SERVIDOR WEB INTERNO PARA RENDER (PORT BINDING) ---
+async def handle_ping(request):
+    return web.Response(text="Nexus Protect is Online 24/7!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Servidor Web activo en el puerto {port}")
+
+# --- INICIALIZACIÓN ---
+async def main():
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        raise ValueError("Error: No se encontró 'DISCORD_TOKEN' en las Variables de Entorno de Render.")
+    
+    await start_web_server()
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
