@@ -20,6 +20,10 @@ intents.guilds = True
 intents.moderation = True
 intents.message_content = True
 
+# --- ESTRUCTURA ANTINUKE ---
+CREATE_CHANNEL_COUNTER = {}
+DELETE_CHANNEL_COUNTER = {}
+
 # --- MENSAJES MULTILINGÜES PARA TICKETS ---
 TICKET_TEXTS = {
     "es": {
@@ -42,6 +46,8 @@ TICKET_TEXTS = {
 
 # --- FUNCIÓN DE LOGS / AUDITORÍA ---
 async def send_log(guild, title, description, color=discord.Color.blue(), thumbnail_url=None, file=None):
+    if not guild:
+        return
     log_channel = discord.utils.get(guild.text_channels, name="nexus-logs")
     if not log_channel:
         overwrites = {
@@ -51,17 +57,23 @@ async def send_log(guild, title, description, color=discord.Color.blue(), thumbn
         for role in guild.roles:
             if role.permissions.administrator:
                 overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        log_channel = await guild.create_text_channel(name="nexus-logs", overwrites=overwrites)
+        try:
+            log_channel = await guild.create_text_channel(name="nexus-logs", overwrites=overwrites)
+        except Exception:
+            return
 
     embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.datetime.utcnow())
     embed.set_footer(text="Nexus Protect • Security Engine", icon_url=guild.icon.url if guild.icon else None)
     if thumbnail_url:
         embed.set_thumbnail(url=thumbnail_url)
         
-    if file:
-        await log_channel.send(embed=embed, file=file)
-    else:
-        await log_channel.send(embed=embed)
+    try:
+        if file:
+            await log_channel.send(embed=embed, file=file)
+        else:
+            await log_channel.send(embed=embed)
+    except Exception:
+        pass
 
 # --- VISTAS DE TICKETS PRIVADOS Y TRANSCRIPCIONES ---
 class CloseTicketView(discord.ui.View):
@@ -204,7 +216,7 @@ class LanguageRoleView(discord.ui.View):
 
         await interaction.user.add_roles(role_en)
         await interaction.response.send_message("✅ You have selected **English** language.", ephemeral=True)
-        # --- BOT PRINCIPAL ---
+# --- BOT PRINCIPAL ---
 class NexusBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
@@ -214,7 +226,7 @@ class NexusBot(commands.Bot):
         self.add_view(CloseTicketView())
         self.add_view(LanguageRoleView())
         await self.tree.sync()
-        print("Nexus Protect: Slash Commands, Onboarding, AntiRaid y Backup listos.")
+        print("Nexus Protect: Slash Commands, Onboarding, AntiRaid, AntiNuke y Backup listos.")
 
 bot = NexusBot()
 
@@ -222,6 +234,47 @@ bot = NexusBot()
 async def on_ready():
     print(f"🛡️ Nexus Protect activo como: {bot.user.name}")
     await bot.change_presence(activity=discord.Game(name="/nexus-status | 24/7 Protected"))
+
+# --- SISTEMA ANTINUKE (DETECCIÓN DE CREACIÓN/ELIMINACIÓN MASIVA) ---
+@bot.event
+async def on_guild_channel_create(channel):
+    guild = channel.guild
+    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_create):
+        user = entry.user
+        if user == bot.user or user == guild.owner:
+            return
+        
+        now = datetime.datetime.utcnow().timestamp()
+        CREATE_CHANNEL_COUNTER.setdefault(user.id, []).append(now)
+        CREATE_CHANNEL_COUNTER[user.id] = [t for t in CREATE_CHANNEL_COUNTER[user.id] if now - t < 10]
+
+        if len(CREATE_CHANNEL_COUNTER[user.id]) >= 3:
+            await send_log(
+                guild,
+                "🚨 ANTINUKE • Creación Masiva de Canales",
+                f"⚠️ El usuario {user.mention} (`{user.id}`) creó más de 3 canales en menos de 10 segundos.",
+                color=discord.Color.dark_red()
+            )
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    guild = channel.guild
+    async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+        user = entry.user
+        if user == bot.user or user == guild.owner:
+            return
+        
+        now = datetime.datetime.utcnow().timestamp()
+        DELETE_CHANNEL_COUNTER.setdefault(user.id, []).append(now)
+        DELETE_CHANNEL_COUNTER[user.id] = [t for t in DELETE_CHANNEL_COUNTER[user.id] if now - t < 10]
+
+        if len(DELETE_CHANNEL_COUNTER[user.id]) >= 3:
+            await send_log(
+                guild,
+                "🚨 ANTINUKE • Eliminación Masiva de Canales",
+                f"⚠️ El usuario {user.mention} (`{user.id}`) eliminó más de 3 canales en menos de 10 segundos.",
+                color=discord.Color.dark_red()
+            )
 
 # --- AUDITORÍA Y LOGS EN TIEMPO REAL ---
 @bot.event
@@ -257,9 +310,10 @@ async def on_member_remove(member):
 
 @bot.event
 async def on_member_update(before, after):
-    if before.avatar != after.avatar:
-        old_avatar = before.avatar.url if before.avatar else before.default_avatar.url
-        new_avatar = after.avatar.url if after.avatar else after.default_avatar.url
+    # Cambio de Foto de Perfil
+    if before.display_avatar != after.display_avatar:
+        old_avatar = before.display_avatar.url
+        new_avatar = after.display_avatar.url
         await send_log(
             after.guild,
             "🖼️ Foto de Perfil Actualizada",
@@ -268,6 +322,7 @@ async def on_member_update(before, after):
             thumbnail_url=new_avatar
         )
 
+    # Cambio de Apodo
     if before.nick != after.nick:
         await send_log(
             after.guild,
@@ -276,6 +331,7 @@ async def on_member_update(before, after):
             color=discord.Color.gold()
         )
 
+    # Cambio de Roles
     if before.roles != after.roles:
         added_roles = [r.mention for r in after.roles if r not in before.roles]
         removed_roles = [r.mention for r in before.roles if r not in after.roles]
@@ -318,9 +374,8 @@ async def on_message_edit(before, after):
         "✏️ Mensaje Editado",
         f"👤 **Autor:** {before.author.mention} (`{before.author.name}`)\n💬 **Canal:** {before.channel.mention}\n\n🛑 **Antes:**\n```{before.content}```\n✅ **Después:**\n```{after.content}```",
         color=discord.Color.orange()
-    )
-
-# --- PROTECCIÓN ANTIRAID ---
+)
+            # --- PROTECCIÓN ANTIRAID ---
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
@@ -464,7 +519,7 @@ async def backup_load(interaction: discord.Interaction, archivo: discord.Attachm
     except Exception as e:
         await interaction.followup.send(f"❌ Error al procesar el archivo de backup: `{e}`", ephemeral=True)
 
-# --- COMANDOS DASHBOARD / MODERACIÓN ---
+# --- COMANDOS DASHBOARD / MODERACIÓN CON MANEJO DE ERRORES ---
 @bot.tree.command(name="setup-onboarding", description="Despliega el panel para seleccionar idioma en un canal.")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_onboarding(interaction: discord.Interaction):
@@ -503,32 +558,41 @@ async def purge(interaction: discord.Interaction, cantidad: int):
         return
 
     await interaction.response.defer(ephemeral=True)
-    deleted = await interaction.channel.purge(limit=cantidad)
-
-    await interaction.followup.send(f"🧹 Se han eliminado **{len(deleted)}** mensajes correctamente.", ephemeral=True)
-
-    await send_log(
-        interaction.guild,
-        "🧹 Purge de Mensajes",
-        f"🛡️ **Moderador:** {interaction.user.mention}\n💬 **Canal:** {interaction.channel.mention}\n🔢 **Cantidad:** `{len(deleted)}` mensajes.",
-        color=discord.Color.purple()
-    )
+    try:
+        deleted = await interaction.channel.purge(limit=cantidad)
+        await interaction.followup.send(f"🧹 Se han eliminado **{len(deleted)}** mensajes correctamente.", ephemeral=True)
+        await send_log(
+            interaction.guild,
+            "🧹 Purge de Mensajes",
+            f"🛡️ **Moderador:** {interaction.user.mention}\n💬 **Canal:** {interaction.channel.mention}\n🔢 **Cantidad:** `{len(deleted)}` mensajes.",
+            color=discord.Color.purple()
+        )
+    except discord.Forbidden:
+        await interaction.followup.send("❌ **[ERROR]** El bot no tiene permisos para gestionar/eliminar mensajes en este canal.", ephemeral=True)
 
 @bot.tree.command(name="kick", description="Expulsa a un usuario del servidor.")
 @app_commands.describe(usuario="Usuario a expulsar", razon="Razón de la expulsión")
 @app_commands.checks.has_permissions(kick_members=True)
 async def kick(interaction: discord.Interaction, usuario: discord.Member, razon: str = "No especificada"):
-    await usuario.kick(reason=razon)
-    await interaction.response.send_message(f"👢 Usuario {usuario.mention} expulsado. Razón: {razon}", ephemeral=True)
-    await send_log(interaction.guild, "👢 Kick de Usuario", f"👤 **Usuario:** {usuario.mention}\n🛡️ **Moderador:** {interaction.user.mention}\n📝 **Razón:** {razon}", color=discord.Color.orange())
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await usuario.kick(reason=razon)
+        await interaction.followup.send(f"👢 Usuario {usuario.mention} expulsado. Razón: {razon}", ephemeral=True)
+        await send_log(interaction.guild, "👢 Kick de Usuario", f"👤 **Usuario:** {usuario.mention}\n🛡️ **Moderador:** {interaction.user.mention}\n📝 **Razón:** {razon}", color=discord.Color.orange())
+    except discord.Forbidden:
+        await interaction.followup.send("❌ **[ERROR]** No tengo permisos suficientes para expulsar a este usuario (su rol es igual o superior al mío en la jerarquía).", ephemeral=True)
 
 @bot.tree.command(name="ban", description="Banea a un usuario del servidor.")
 @app_commands.describe(usuario="Usuario a banear", razon="Razón del baneo")
 @app_commands.checks.has_permissions(ban_members=True)
 async def ban(interaction: discord.Interaction, usuario: discord.Member, razon: str = "No especificada"):
-    await usuario.ban(reason=razon)
-    await interaction.response.send_message(f"⛔ Usuario {usuario.mention} baneado. Razón: {razon}", ephemeral=True)
-    await send_log(interaction.guild, "⛔ Ban de Usuario", f"👤 **Usuario:** {usuario.mention}\n🛡️ **Moderador:** {interaction.user.mention}\n📝 **Razón:** {razon}", color=discord.Color.red())
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await usuario.ban(reason=razon)
+        await interaction.followup.send(f"⛔ Usuario {usuario.mention} baneado. Razón: {razon}", ephemeral=True)
+        await send_log(interaction.guild, "⛔ Ban de Usuario", f"👤 **Usuario:** {usuario.mention}\n🛡️ **Moderador:** {interaction.user.mention}\n📝 **Razón:** {razon}", color=discord.Color.red())
+    except discord.Forbidden:
+        await interaction.followup.send("❌ **[ERROR]** No tengo permisos suficientes para banear a este usuario.", ephemeral=True)
 
 @bot.tree.command(name="nexus-status", description="Muestra el estado de Nexus Protect.")
 async def nexus_status(interaction: discord.Interaction):
@@ -537,6 +601,7 @@ async def nexus_status(interaction: discord.Interaction):
         description="🟢 **Estado:** En línea y operativo 24/7\n"
                     "📜 **Transcripciones:** Activas (Envío por MD al dueño)\n"
                     "📦 **Backup System:** Activo (`/backup-create`, `/backup-load`)\n"
+                    "🚨 **AntiNuke:** Monitoreando creación/eliminación de canales\n"
                     "🕵️ **Auditoría:** Logs en tiempo real activos\n"
                     "⚔️ **AntiRaid:** Protección activa",
         color=discord.Color.green()
@@ -568,4 +633,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                
