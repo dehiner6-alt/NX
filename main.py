@@ -216,6 +216,7 @@ class LanguageRoleView(discord.ui.View):
 
         await interaction.user.add_roles(role_en)
         await interaction.response.send_message("✅ You have selected **English** language.", ephemeral=True)
+
 # --- BOT PRINCIPAL ---
 class NexusBot(commands.Bot):
     def __init__(self):
@@ -230,12 +231,21 @@ class NexusBot(commands.Bot):
 
 bot = NexusBot()
 
+# --- MANEJADOR GLOBAL DE ERRORES PARA COMANDOS SIN PERMISO ---
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        msg = "⛔ **[ACCESO DENEGADO]** No tienes los permisos necesarios para ejecutar este comando."
+        if not interaction.response.is_done():
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
 @bot.event
 async def on_ready():
     print(f"🛡️ Nexus Protect activo como: {bot.user.name}")
     await bot.change_presence(activity=discord.Game(name="/nexus-status | 24/7 Protected"))
-
-# --- SISTEMA ANTINUKE (DETECCIÓN DE CREACIÓN/ELIMINACIÓN MASIVA) ---
+# --- SISTEMA ANTINUKE ---
 @bot.event
 async def on_guild_channel_create(channel):
     guild = channel.guild
@@ -279,7 +289,7 @@ async def on_guild_channel_delete(channel):
 # --- AUDITORÍA Y LOGS EN TIEMPO REAL ---
 @bot.event
 async def on_member_join(member):
-    avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+    avatar_url = member.display_avatar.url
     await send_log(
         member.guild,
         "📥 Nuevo Miembro",
@@ -299,7 +309,7 @@ async def on_member_join(member):
 
 @bot.event
 async def on_member_remove(member):
-    avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+    avatar_url = member.display_avatar.url
     await send_log(
         member.guild,
         "📤 Miembro Salió",
@@ -310,7 +320,6 @@ async def on_member_remove(member):
 
 @bot.event
 async def on_member_update(before, after):
-    # Cambio de Foto de Perfil
     if before.display_avatar != after.display_avatar:
         old_avatar = before.display_avatar.url
         new_avatar = after.display_avatar.url
@@ -322,7 +331,6 @@ async def on_member_update(before, after):
             thumbnail_url=new_avatar
         )
 
-    # Cambio de Apodo
     if before.nick != after.nick:
         await send_log(
             after.guild,
@@ -331,7 +339,6 @@ async def on_member_update(before, after):
             color=discord.Color.gold()
         )
 
-    # Cambio de Roles
     if before.roles != after.roles:
         added_roles = [r.mention for r in after.roles if r not in before.roles]
         removed_roles = [r.mention for r in before.roles if r not in after.roles]
@@ -374,8 +381,9 @@ async def on_message_edit(before, after):
         "✏️ Mensaje Editado",
         f"👤 **Autor:** {before.author.mention} (`{before.author.name}`)\n💬 **Canal:** {before.channel.mention}\n\n🛑 **Antes:**\n```{before.content}```\n✅ **Después:**\n```{after.content}```",
         color=discord.Color.orange()
-)
-            # --- PROTECCIÓN ANTIRAID ---
+    )
+
+# --- PROTECCIÓN ANTIRAID ---
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild:
@@ -519,7 +527,7 @@ async def backup_load(interaction: discord.Interaction, archivo: discord.Attachm
     except Exception as e:
         await interaction.followup.send(f"❌ Error al procesar el archivo de backup: `{e}`", ephemeral=True)
 
-# --- COMANDOS DASHBOARD / MODERACIÓN CON MANEJO DE ERRORES ---
+# --- COMANDOS DASHBOARD / MODERACIÓN ---
 @bot.tree.command(name="setup-onboarding", description="Despliega el panel para seleccionar idioma en un canal.")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_onboarding(interaction: discord.Interaction):
@@ -608,7 +616,7 @@ async def nexus_status(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-# --- SERVIDOR WEB INTERNO PARA RENDER (SIN CONFLICTO CON DISCORD) ---
+# --- SERVIDOR WEB INTERNO PARA RENDER ---
 async def handle_ping(request):
     return web.Response(text="Nexus Protect is Online 24/7!")
 
@@ -628,10 +636,8 @@ async def main():
     if not TOKEN:
         raise ValueError("Error: No se encontró 'DISCORD_TOKEN' en las Variables de Entorno de Render.")
     
-    # Inicia servidor HTTP web
     await start_web_server()
     
-    # Conecta el bot a Discord con reconexión automática
     try:
         async with bot:
             await bot.start(TOKEN)
@@ -643,3 +649,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+        
