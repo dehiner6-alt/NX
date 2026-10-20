@@ -608,7 +608,7 @@ async def nexus_status(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-# --- SERVIDOR WEB INTERNO PARA RENDER ---
+# --- SERVIDOR WEB INTERNO PARA RENDER (SIN CONFLICTO CON DISCORD) ---
 async def handle_ping(request):
     return web.Response(text="Nexus Protect is Online 24/7!")
 
@@ -622,14 +622,24 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Servidor Web activo en el puerto {port}")
 
-# --- INICIALIZACIÓN ---
+# --- INICIALIZACIÓN PRINCIPAL ---
 async def main():
     TOKEN = os.getenv("DISCORD_TOKEN")
     if not TOKEN:
         raise ValueError("Error: No se encontró 'DISCORD_TOKEN' en las Variables de Entorno de Render.")
     
+    # Inicia servidor HTTP web
     await start_web_server()
-    await bot.start(TOKEN)
+    
+    # Conecta el bot a Discord con reconexión automática
+    try:
+        async with bot:
+            await bot.start(TOKEN)
+    except Exception as e:
+        print(f"Error al iniciar bot: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
